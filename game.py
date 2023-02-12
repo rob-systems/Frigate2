@@ -19,10 +19,12 @@ def disp_icon():
 
 
 ####################################################################
+    #HELPER FUNCTIONS
 ####################################################################
 
 def get_list_from_polygon(polygon):
     #because I can't seem to directly iterate over shapely's polygons
+    #it seems really convuluted
     l = []
     xx, yy = polygon.exterior.coords.xy
     newxcoords, newycoords = [], []
@@ -66,7 +68,48 @@ def normalize_vector(x, y):
         return x, y
 
 ####################################################################
+    #TO BE DISPLAYED BEFORE GAME STARTS
 ####################################################################
+
+class Menu():
+    def __init__(self):
+        #List of menu items
+        self.items = ["Play Game", "High Scores"]
+        self.item_positions = [(200, 200), (200, 250)]
+        self.selected = None
+
+    def draw(self,screen):
+        screen.blit(font.render("Frigate", True, (0,0,0)), (230, 120))
+        for i, item in enumerate(self.items):
+            menu_item = font_med.render(item, True, (0,0,0) if item == "Play Game" else (100,100,100))
+            screen.blit(menu_item, (self.item_positions[i][0], self.item_positions[i][1]))
+
+    def update(self, screen, mouse_pos):
+        #below loops over menu items, creates a polygon, checks if mouse position is within polygon, if so draws line under selected menu item
+        for i, position in enumerate(self.item_positions):
+            box = Polygon([position, (position[0] + 200, position[1]), (position[0] + 200, position[1] + 35), (position[0], position[1] + 35)])
+            mouse = Point(mouse_pos)
+            if mouse.within(box):
+                if i == 0:
+                    pygame.draw.line(screen, (0,0,0), (position[0], position[1] + 35), (position[0] + 200, position[1] + 35), 3)
+                    self.selected = self.items[i]
+            else:
+                self.selected = None if self.selected == self.items[i] else self.selected
+
+    def select(self):
+        #starts game if mouse position is within play game button box 
+        game_started = False
+        if self.selected == "Play Game":
+            game_started = True
+            #print(game_started)
+        else:
+            game_started = False
+        return game_started
+
+####################################################################
+####################################################################
+
+EVENTS = { "ENEMY_RELOAD": pygame.USEREVENT + 1, "USER_RELOAD": pygame.USEREVENT + 2}
 
 class Island(pygame.sprite.Sprite):
     def __init__(self, data):
@@ -162,7 +205,7 @@ class Shell(pygame.sprite.Sprite):
     def move(self, all_sprites):
         self.iter += 1
         speed = self.firing_speed - (self.iter / 300 * self.firing_speed)
-        if speed <= 3.5 or self.clamp_to_screen():
+        if speed <= 4 or self.clamp_to_screen():
             self.de_spawn(all_sprites)
         self.cur_pos = Point(self.cur_pos.x + self.dx * speed, self.cur_pos.y + self.dy * speed)
 
@@ -188,6 +231,7 @@ class Boat(pygame.sprite.Sprite):
         self.create_hull(data["pos"], data["fwards_or_bwards"])
         self.cur_turn, self.turn_by, self.movement_dir = 0, 0, 0
         self.tur_end_pos = (0,0)
+        self.is_reloading = False
 
     def set_tur_end_pos(self, center):
         target_pos = pygame.mouse.get_pos() if self.is_friendly else self.target
@@ -202,8 +246,18 @@ class Boat(pygame.sprite.Sprite):
         S1 = Shell(self.is_friendly)
         S1.spawn(self.tur_end_pos, target_pos)
         all_sprites.add(S1)
+        self.start_reload()
 
-    def create_hull(self, center, facing=-1):
+    def start_reload(self):
+        RELOAD = pygame.event.Event(EVENTS["ENEMY_RELOAD"], { "id": self.id }) if not self.is_friendly else pygame.event.Event(EVENTS["USER_RELOAD"])
+        pygame.time.set_timer(RELOAD, 3000)
+        self.is_reloading = True
+
+    def stop_reload(self):
+        pygame.time.set_timer(EVENTS["ENEMY_RELOAD"], 0)
+        self.is_reloading = False
+
+    def create_hull(self, center: (int,int), facing=-1):
         boat_length, boat_width, stern_length = 50, 15, 13
         if facing == 1:
             self.hull = Polygon([(center[0] ,center[1]-(boat_length / 2)),
@@ -261,6 +315,7 @@ class Enemy(Boat):
         self.is_friendly = False
         self.target = (0,0)
         self.health = 50
+        self.id = data["id"]
 
     def update(self, user, all_sprites):
         self.target = user.get_position()
@@ -269,9 +324,8 @@ class Enemy(Boat):
     def auto_fire(self, all_sprites):
         ifuckedup = get_polygon_center(get_list_from_polygon(self.hull))
         var = round(get_vector_length(self.target[0] - ifuckedup[0], self.target[1] - ifuckedup[1]))
-        if var < 300:
+        if var < 300 and not self.is_reloading:
             self.fire(all_sprites, self.target)
-        pass
         
 
 class User(Boat):
@@ -280,6 +334,10 @@ class User(Boat):
         self.is_friendly = True
         self.movement_dir = 0
         self.turn_by = 0
+        self.health = 150
+
+    def get_health(self):
+        return self.health
 
     def mouse_fire(self, all_sprites, mouse_pos):
         self.fire(all_sprites, mouse_pos)
@@ -298,10 +356,11 @@ class User(Boat):
             self.movement_dir = 0
 
     def move(self, all_sprites):
+        #TO add accelerate and deccelerate on ship moving
         if (self.turn_by != 0):
             self.cur_turn += self.turn_by / (1 if self.movement_dir > 0 else 2)
-        dx = self.movement_dir * math.sin(math.radians(self.cur_turn)) / (2 if self.movement_dir > 0 else 4)
-        dy = -self.movement_dir * math.cos(math.radians(self.cur_turn)) / (2 if self.movement_dir > 0 else 4)
+        dx = self.movement_dir * 2 *math.sin(math.radians(self.cur_turn)) / (2 if self.movement_dir > 0 else 4)
+        dy = -self.movement_dir * 2 *math.cos(math.radians(self.cur_turn)) / (2 if self.movement_dir > 0 else 4)
         hull_coords = move_polygon(get_list_from_polygon(self.hull), (dx, dy))
         self.hull = Polygon(hull_coords)
 
@@ -309,6 +368,29 @@ class User(Boat):
         return get_polygon_center(get_list_from_polygon(self.hull))
 
     #def hack enemy ship
+
+class Dashboard():
+    def __init__(self):
+        self.surface = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT / 8))
+        self.rect = self.surface.get_rect()
+        self.rect.y = 7/8 * SCREEN_HEIGHT
+        self.user_health = None
+
+    def draw_user_health(self):
+        pygame.draw.rect(self.surface, (0,255,0), (10, 10, self.user_health, 20))
+
+    def draw_score(self, user_score):
+        scores = font_small.render(str(user_score), True, (0,0,0))
+        self.surface.blit(scores, (10,40))
+
+    def update(self, user_health):
+        self.user_health = user_health
+
+    def draw(self, screen, user_score):
+        screen.blit(self.surface, self.rect)
+        self.surface.fill((255,255,255))
+        self.draw_score(user_score)
+        self.draw_user_health()
 
 class Game():
     def __init__(self, data):
@@ -325,7 +407,7 @@ class Game():
         if event.unicode == 'w':
             user.start_move(1)
             if user.get_position()[1] < SCREEN_HEIGHT / 2:
-                self.dy = -1
+                self.dy -= 1
         if event.unicode == 's':
             user.start_move(-1)
             #self.dy = 1
@@ -346,6 +428,45 @@ class Game():
         if event.unicode == 'd' and user.turn_by != 0:
             user.end_turn()
 
+    def draw_waves(self):
+        nwavesx = 12
+        nwavesy = 10
+        #get some wavey action
+        for y in range(0, int(SCREEN_HEIGHT * 7/8 / nwavesy)):
+            for x in range(0, int(SCREEN_WIDTH / nwavesx)):
+                #pygame.draw.arc(self.map_surface, (255,255,255), (x * 64, y * 48, 8, 6), 0.1, 0.9, 1)
+                pygame.draw.arc(self.map_surface, (200,200,200), (32 + self.wave_iter + x * 64 + 2 - 10, 24 + y * 48 + 10, 8, 6), 1, 3, 1)
+        self.wave_iter = self.wave_iter + 0.5 if self.wave_iter < 50 else 0
+
+    def draw(self, screen, all_sprites, dashboard):
+        self.map_surface.fill((0,0,255))
+        self.draw_waves()
+        #draw sprites
+        for sprite in all_sprites:
+             sprite.draw(self.map_surface)
+        #put map on screen
+        screen.blit(self.map_surface, self.rect)
+        dashboard.draw(screen, self.user_score)
+        
+
+    def handle_shells(self, all_sprites, user):
+        for sprite in all_sprites:
+            if sprite.__class__.__name__ == "Shell":
+                for spriteT in all_sprites:
+                    if spriteT.__class__.__name__ == "Enemy" and sprite.is_friendly:
+                        if sprite.cur_pos.within(spriteT.hull):
+                            sprite.hit_target(all_sprites)
+                            has_died = spriteT.take_damage()
+                            if has_died:
+                                spriteT.de_spawn(all_sprites)
+                                self.user_score += 5
+                    elif spriteT.__class__.__name__ == "User" and not sprite.is_friendly:
+                        if sprite.cur_pos.within(spriteT.hull):
+                            sprite.hit_target(all_sprites)
+                            has_died = spriteT.take_damage()
+
+    
+
     def scroll_map(self, all_sprites):
         if self.dy != 0:
             self.progress -= self.dy
@@ -356,42 +477,12 @@ class Game():
             I1 = Island({ "pos": (0,0) })
             all_sprites.add(I1)
             self.level += 1
-
-    def draw(self, screen, all_sprites):
-        self.map_surface.fill((0,0,255))
-        nwavesx = 64
-        nwavesy = 48
-        #get some wavey action
-        for y in range(0, int(SCREEN_HEIGHT / nwavesy)):
-            for x in range(0, int(SCREEN_WIDTH / nwavesx)):
-                #pygame.draw.arc(self.map_surface, (255,255,255), (x * 64, y * 48, 8, 6), 0.1, 0.9, 1)
-                pygame.draw.arc(self.map_surface, (200,200,200), (32 + self.wave_iter + x * 64 + 2, 24 + y * 48, 8, 6), 1, 3, 1)
-        self.wave_iter = self.wave_iter + 0.5 if self.wave_iter < 50 else 0
-        #draw sprites
-        for sprite in all_sprites:
-             sprite.draw(self.map_surface)
-        self.draw_score()
-        #put map on screen
-        screen.blit(self.map_surface, self.rect)
-
-    def draw_score(self):
-        scores = font_small.render(str(self.user_score), True, (255,255,255))
-        self.map_surface.blit(scores, (10,10))
-
-    def handle_shells(self, all_sprites, user):
-        for sprite in all_sprites:
-            if sprite.__class__.__name__ == "Shell":
-                for spriteT in all_sprites:
-                    if spriteT.__class__.__name__ == "Enemy":
-                        if sprite.cur_pos.within(spriteT.hull):
-                            sprite.hit_target(all_sprites)
-                            has_died = spriteT.take_damage()
-                            if has_died:
-                                spriteT.de_spawn(all_sprites)
-                                self.user_score += 5
                             
 
-    def update(self, all_sprites, user):
+    def update(self, all_sprites, user, dashboard):
+        dashboard.update(user.get_health())
+        if user.get_position()[1] < SCREEN_HEIGHT / 2 and user.movement_dir == -1:
+                self.dy -= 1
         self.scroll_map(all_sprites)
         self.handle_shells(all_sprites, user)
         for sprite in all_sprites:
@@ -401,42 +492,10 @@ class Game():
                 #print(sprite.__class__ == '.Boat')
                 sprite.update(user, all_sprites)
                 #sprite.fire(all_sprites, user.get_position())
-
-class Menu():
-    def __init__(self):
-        self.items = ["Play Game", "High Scores"]
-        self.item_positions = [(200, 200), (200, 250)]
-        self.selected = None
-
-    def draw(self,screen):
-        screen.blit(font.render("Frigate", True, (0,0,0)), (230, 120))
-        for i, item in enumerate(self.items):
-            menu_item = font_med.render(item, True, (0,0,0) if item == "Play Game" else (100,100,100))
-            screen.blit(menu_item, (self.item_positions[i][0], self.item_positions[i][1]))
-
-    def update(self, screen, mouse_pos):
-        for i, position in enumerate(self.item_positions):
-            box = Polygon([position, (position[0] + 200, position[1]), (position[0] + 200, position[1] + 35), (position[0], position[1] + 35)])
-            mouse = Point(mouse_pos)
-            if mouse.within(box):
-                if i == 0:
-                    pygame.draw.line(screen, (0,0,0), (position[0], position[1] + 35), (position[0] + 200, position[1] + 35), 3)
-                    self.selected = self.items[i]
-            else:
-                self.selected = None if self.selected == self.items[i] else self.selected
-
-    def select(self):
-        game_started = False
-        if self.selected == "Play Game":
-            game_started = True
-            #print(game_started)
-        else:
-            game_started = False
-        return game_started
         
 
 def order_all_sprites(all_sprites):
-    order =["Sink_Spot", "User", "Enemy", "Shell", "Shrapnel"]
+    order =["Island", "Sink_Spot", "User", "Enemy", "Shell", "Shrapnel"]
     new_all_sprites = pygame.sprite.Group()
     for i in order:
         for sprite in all_sprites:
@@ -451,14 +510,8 @@ def main():
     screen = pygame.display.set_mode((SCREEN_WIDTH,SCREEN_HEIGHT))
     game_started = False
     game_over = False
-    ########### SPRITE INITIALIZATION
-    G1 = Game({ "s_h": SCREEN_HEIGHT, "s_w": SCREEN_WIDTH })
-    all_sprites = pygame.sprite.Group()
-    user = User({ "pos": (SCREEN_WIDTH /2,  SCREEN_HEIGHT - 30), "fwards_or_bwards": 1})
-    enemy = Enemy({ "pos": (100, 100), "fwards_or_bwards": -1 })
-    all_sprites.add(user, enemy)
-    ###########
     running = True
+    game_ready = False
     menu = Menu()
     while running:
         if not game_started:
@@ -476,7 +529,17 @@ def main():
             pygame.event.pump()
             pygame.display.update()
         elif game_started and not game_over:
-            
+            if not game_ready:
+                ########### CLASS CREATION
+                G1 = Game({ "s_h": SCREEN_HEIGHT *  7 / 8, "s_w": SCREEN_WIDTH })
+                dashboard = Dashboard()
+                all_sprites = pygame.sprite.Group()
+                user = User({ "pos": (SCREEN_WIDTH /2,  SCREEN_HEIGHT * 7/8 - 30), "fwards_or_bwards": 1})
+                #enemy = Enemy({ "pos": (100, 100), "fwards_or_bwards": -1, "id": 1 })
+                I1 = Island({ "pos": (200,200) })
+                all_sprites.add(user, I1)#, #enemy)
+                game_ready = True
+                ###########
             for event in pygame.event.get():
                     if event.type == pygame.QUIT:
                         running = False
@@ -492,11 +555,17 @@ def main():
                     if event.type == pygame.MOUSEBUTTONDOWN:
                         user.mouse_fire(all_sprites, pygame.mouse.get_pos())
 
-            G1.update(all_sprites, user)
+                    if event.type == EVENTS["ENEMY_RELOAD"]:
+                        for sprite in all_sprites:
+                            if sprite.__class__.__name__ == "Enemy":
+                                if event.__dict__["id"] == sprite.id:
+                                    sprite.stop_reload()
+
+            G1.update(all_sprites, user, dashboard)
 
             screen.fill((255,255,255))
             all_sprites = order_all_sprites(all_sprites)
-            G1.draw(screen, all_sprites)
+            G1.draw(screen, all_sprites, dashboard)
         
             pygame.event.pump()
             pygame.display.update()
